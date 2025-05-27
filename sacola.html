@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sacola de Compras</title>
+  <!-- Fonte Lora -->
+  <link href="https://fonts.googleapis.com/css2?family=Lora&display=swap" rel="stylesheet">
+  <!-- Font Awesome -->
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.2.1/css/all.min.css" />
+  <style>
+    body {
+      font-family: 'Lora', serif;
+      background: #fff;
+      color: #000;
+      padding: 20px;
+    }
+    h1 {
+      text-align: center;
+      margin-bottom: 10px;
+      font-size: 2em;
+    }
+    .payment {
+      margin: 10px 0 20px;
+      text-align: right;
+    }
+    .payment label {
+      font-weight: bold;
+      margin-right: 10px;
+    }
+    .payment select {
+      padding: 5px;
+      font-size: 1em;
+      margin-right: 10px;
+    }
+    #installmentsContainer {
+      display: inline-block;
+    }
+    #installmentSummary {
+      font-size: 0.9em;
+      margin-top: 5px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 10px;
+    }
+    th, td {
+      border: 1px solid #ccc;
+      padding: 8px;
+      text-align: center;
+    }
+    input.cart-qty {
+      width: 60px;
+      text-align: center;
+    }
+    .total-final {
+      text-align: right;
+      font-size: 1.2em;
+      margin-bottom: 20px;
+    }
+    .button {
+      display: inline-block;
+      padding: 10px 20px;
+      background-color: #007BFF;
+      color: #fff;
+      text-decoration: none;
+      border-radius: 5px;
+      margin-right: 10px;
+      transition: background-color 0.3s ease;
+      cursor: pointer;
+    }
+    .button:hover {
+      background-color: #0056b3;
+    }
+    .delete-button {
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: #d00;
+      font-size: 1em;
+      transition: color 0.3s ease;
+    }
+    .delete-button:hover {
+      color: #a00;
+    }
+  </style>
+</head>
+<body>
+  <h1>Sacola de Compras</h1>
+
+  <div class="payment">
+    <label for="paymentMethod">Forma de Pagamento:</label>
+    <select id="paymentMethod">
+      <option value="avista">À vista</option>
+      <option value="cartao">Cartão de crédito</option>
+      <option value="outros">Outros</option>
+    </select>
+    <span id="installmentsContainer" style="display:none;">
+      <label for="installments">Parcelas:</label>
+      <select id="installments"></select>
+      <div id="installmentSummary"></div>
+    </span>
+  </div>
+
+  <div id="cartContainer"></div>
+  <div class="total-final" id="grandTotalDisplay"></div>
+
+  <div style="text-align: center;">
+    <a href="catalogo.html" class="button">Continuar Comprando</a>
+    <button id="finalizeButton" class="button">Processar Pedido</button>
+  </div>
+
+  <!-- PapaParse para ler CSV -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+  <script>
+    // URLs das abas publicadas (substitua gid=0 pela sua aba de Produtos)
+    const PRODUCTS_CSV_URL   = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQZNbgexgACZji8qW1sjmUDQuTWyw9vTNrEXqdViEzi7OrKm7HoTqc2VSGS5kCdBFxbk-yw4riDo7ya/pub?gid=0&single=true&output=csv';
+    // Aba de Parcelas (gid=1451751055)
+    const SURCHARGES_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQZNbgexgACZji8qW1sjmUDQuTWyw9vTNrEXqdViEzi7OrKm7HoTqc2VSGS5kCdBFxbk-yw4riDo7ya/pub?gid=1451751055&single=true&output=csv';
+
+    const priceMap     = {};
+    const statusMap    = {};
+    const surchargeMap = {};  // ex.: { '1':4, '2':5, …, '10':14 }
+    let currentGrandTotal = 0;
+
+    // 1) Carrega Produtos
+    Papa.parse(PRODUCTS_CSV_URL, {
+      download: true, header: true,
+      complete: results => {
+        results.data.forEach(row => {
+          const name = (row.Produto || '').trim();
+          if (!name) return;
+          priceMap[name]  = parseFloat(String(row.Preco).replace(',', '.')) || 0;
+          statusMap[name] = (row.Status || 'ativo').trim().toLowerCase();
+        });
+        updateCartDisplay();
+      },
+      error: () => alert('Não foi possível carregar os produtos.')
+    });
+
+    // 2) Carrega Parcelas/Percentuais
+    Papa.parse(SURCHARGES_CSV_URL, {
+      download: true, header: true,
+      complete: results => {
+        results.data.forEach(row => {
+          const p = String(row.Parcela || '').trim();
+          const pct = parseFloat(String(row.Percentual).replace(',', '.'));
+          if (p && !isNaN(pct)) surchargeMap[p] = pct;
+        });
+        populateInstallmentOptions();
+      },
+      error: () => alert('Não foi possível carregar as parcelas.')
+    });
+
+    // 3) Preenche opções de 1x…10x
+    function populateInstallmentOptions() {
+      const sel = document.getElementById('installments');
+      sel.innerHTML = '';
+      Object.keys(surchargeMap).sort((a,b)=>a-b).forEach(n => {
+        const opt = document.createElement('option');
+        opt.value = n;
+        opt.textContent = n + 'x';
+        sel.append(opt);
+      });
+      sel.addEventListener('change', updateInstallmentSummary);
+    }
+
+    // 4) Atualiza exibição da sacola
+    function updateCartDisplay() {
+      const cart = JSON.parse(localStorage.getItem('cart')) || [];
+      const cont = document.getElementById('cartContainer');
+      const btnF = document.getElementById('finalizeButton');
+      const method = document.getElementById('paymentMethod').value;
+
+      if (!cart.length) {
+        cont.innerHTML = '<p>Sua sacola está vazia.</p>';
+        document.getElementById('grandTotalDisplay').textContent = '';
+        btnF.style.display = 'none';
+        hideInstallments();
+        return;
+      }
+      btnF.style.display = 'inline-block';
+
+      let html = '<table><thead><tr>'
+               + '<th>Produto</th><th>Unitário</th>'
+               + '<th>Qtd.</th><th>Total</th><th></th>'
+               + '</tr></thead><tbody>';
+      currentGrandTotal = 0;
+
+      cart.forEach(item => {
+        const basePrice = priceMap[item.name] || 0;
+        let unitPrice = basePrice;
+        if (method === 'cartao') {
+          const pct = surchargeMap[ document.getElementById('installments').value ] || 0;
+          unitPrice = basePrice * (1 + pct/100);
+        }
+        const total = unitPrice * item.qty;
+        currentGrandTotal += total;
+
+        html += `<tr>
+          <td>${item.name}</td>
+          <td>R$ ${unitPrice.toFixed(2)}</td>
+          <td><input type="number"
+                     class="cart-qty"
+                     data-name="${item.name}"
+                     value="${item.qty}"
+                     min="0"
+                     onchange="updateQuantity(this)"></td>
+          <td>R$ ${total.toFixed(2)}</td>
+          <td><button class="delete-button"
+                      onclick="removeFromCart('${item.name}')">
+                <i class="fas fa-trash"></i>
+              </button></td>
+        </tr>`;
+      });
+
+      html += '</tbody></table>';
+      cont.innerHTML = html;
+
+      const label = (method === 'cartao')
+        ? `Total (Cartão de crédito): R$ ${currentGrandTotal.toFixed(2)}`
+        : `Total à vista/outros: R$ ${currentGrandTotal.toFixed(2)}`;
+      document.getElementById('grandTotalDisplay').textContent = label;
+
+      if (method === 'cartao') showInstallments();
+      else hideInstallments();
+    }
+
+    function showInstallments() {
+      document.getElementById('installmentsContainer').style.display = 'inline-block';
+      updateInstallmentSummary();
+    }
+    function hideInstallments() {
+      document.getElementById('installmentsContainer').style.display = 'none';
+    }
+
+    function updateInstallmentSummary() {
+      const cnt = parseInt(document.getElementById('installments').value);
+      const pct = surchargeMap[cnt] || 0;
+      const per = currentGrandTotal / cnt;
+      document.getElementById('installmentSummary')
+        .textContent = `${cnt}x de R$ ${per.toFixed(2)} (juros ${pct}%)`;
+      // re-renderiza com novos unitários
+      updateCartDisplay();
+    }
+
+    function updateQuantity(input) {
+      const name = input.dataset.name;
+      const qty  = parseInt(input.value) || 0;
+      let cart = JSON.parse(localStorage.getItem('cart')) || [];
+      const idx = cart.findIndex(i => i.name === name);
+      if (idx > -1) {
+        if (qty > 0) cart[idx].qty = qty;
+        else cart.splice(idx, 1);
+        localStorage.setItem('cart', JSON.stringify(cart));
+        updateCartDisplay();
+      }
+    }
+
+    function removeFromCart(name) {
+      let cart = JSON.parse(localStorage.getItem('cart')) || [];
+      const idx = cart.findIndex(i => i.name === name);
+      if (idx > -1) cart.splice(idx, 1);
+      localStorage.setItem('cart', JSON.stringify(cart));
+      updateCartDisplay();
+    }
+
+    document.getElementById('paymentMethod')
+      .addEventListener('change', updateCartDisplay);
+
+    // 5) Listener de finalização (recalculando total)
+    document.getElementById('finalizeButton')
+      .addEventListener('click', function(e) {
+        e.preventDefault();
+        const cart = JSON.parse(localStorage.getItem('cart')) || [];
+        if (!cart.length) return;
+        const customer = prompt('Por favor, digite seu nome:');
+        if (!customer) return;
+
+        const method = document.getElementById('paymentMethod').value;
+        const cnt    = method === 'cartao'
+                     ? parseInt(document.getElementById('installments').value) || 1
+                     : 1;
+        const pct    = method === 'cartao'
+                     ? (surchargeMap[cnt] || 0)
+                     : 0;
+
+        const lines = [];
+        lines.push(`Olá, meu nome é ${customer}.`);
+        lines.push('Gostaria de registrar o pedido abaixo:');
+        lines.push('');
+        lines.push('Produto | Qtde | Total');
+        lines.push('------------------------');
+
+        let finalTotal = 0;
+        cart.forEach(item => {
+          const basePrice = priceMap[item.name] || 0;
+          const unitPrice = basePrice * (1 + pct/100);
+          const total = unitPrice * item.qty;
+          finalTotal += total;
+          lines.push(`${item.name} | ${item.qty} | R$${total.toFixed(2)}`);
+        });
+
+        lines.push('');
+        if (method === 'cartao') {
+          lines.push(`${cnt}x de R$${(finalTotal/cnt).toFixed(2)}`);
+          lines.push(`Total com juros (${pct}%): R$${finalTotal.toFixed(2)}`);
+        } else {
+          lines.push(`Total: R$${finalTotal.toFixed(2)}`);
+        }
+
+        const msg = encodeURIComponent(lines.join('\n'));
+        window.location.href = 'https://wa.me/5537999139844?text=' + msg;
+      });
+
+    // inicializa
+    updateCartDisplay();
+  </script>
+</body>
+</html>
+
+
+
+
